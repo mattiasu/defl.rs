@@ -1,16 +1,30 @@
 use std::io::Read;
 
 fn main() {
+    let allowed_domains: Vec<String> = std::env::var("ALLOWED_DOMAINS")
+        .expect("ALLOWED_DOMAINS environment variable must be set")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if allowed_domains.is_empty() {
+        eprintln!("ERROR: ALLOWED_DOMAINS is set but contains no domains");
+        std::process::exit(1);
+    }
+
+    println!("allowed domains: {}", allowed_domains.join(", "));
+
     let server = tiny_http::Server::http("0.0.0.0:8080").expect("failed to start server");
     println!("listening on http://0.0.0.0:8080");
 
     for mut request in server.incoming_requests() {
-        let response = handle(&mut request);
+        let response = handle(&mut request, &allowed_domains);
         let _ = request.respond(response);
     }
 }
 
-fn handle(request: &mut tiny_http::Request) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+fn handle(request: &mut tiny_http::Request, allowed_domains: &[String]) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
     let method = request.method().as_str().to_string();
     let remote = request
         .remote_addr()
@@ -29,7 +43,7 @@ fn handle(request: &mut tiny_http::Request) -> tiny_http::Response<std::io::Curs
 
     println!("[{remote}] {method} -> {target_url}");
 
-    match forward(request, &target_url) {
+    match forward(request, &target_url, allowed_domains) {
         Ok((response, status)) => {
             println!("[{remote}] {method} -> {target_url} <- {status}");
             response
@@ -55,13 +69,31 @@ fn extract_target(headers: &[tiny_http::Header]) -> Option<String> {
     })
 }
 
+fn extract_host(url: &str) -> Option<&str> {
+    let after_scheme = url.split_once("://")?.1;
+    let host_and_maybe_port = after_scheme.split('/').next()?;
+    Some(host_and_maybe_port.split(':').next()?)
+}
+
 fn forward(
     request: &mut tiny_http::Request,
     target_url: &str,
+    allowed_domains: &[String],
 ) -> Result<
     (tiny_http::Response<std::io::Cursor<Vec<u8>>>, u16),
     Box<dyn std::error::Error>,
 > {
+    let host = extract_host(target_url)
+        .ok_or("could not parse host from X-Target-Url")?;
+
+    if !allowed_domains.iter().any(|d| d.eq_ignore_ascii_case(host)) {
+        let body = format!("target domain '{host}' is not in ALLOWED_DOMAINS");
+        return Ok((
+            tiny_http::Response::from_data(body.into_bytes()).with_status_code(403),
+            403,
+        ));
+    }
+
     let mut body = Vec::new();
     request.as_reader().read_to_end(&mut body)?;
 
