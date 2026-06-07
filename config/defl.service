@@ -1,0 +1,12 @@
+[Unit]
+Description=defl request deflector
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/systemd/system/defl.env
+ExecStart=/home/<user>/defl
+Restart=always
+User=muhlegard
+
+[Install]
+WantedBy=multi-user.target
